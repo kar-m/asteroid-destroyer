@@ -215,10 +215,16 @@ class Asteroid {
         const e = 1 - r_p / a;
         const p_orb = a * (1 - e * e);
         const omega = Math.random() * Math.PI * 2;
-        const thetaSpawn = Math.random() * (Math.PI * 2 / 3) + (Math.PI * 2 / 3);
-        const r = p_orb / (1 + e * Math.cos(thetaSpawn));
-        const L = Math.sqrt(MU * p_orb);
 
+        let thetaSpawn;
+        let r;
+        const MIN_SPAWN_DISTANCE = 6.0; // Ensures it spawns well away from Earth (radius 1.5)
+        do {
+            thetaSpawn = Math.random() * Math.PI * 2;
+            r = p_orb / (1 + e * Math.cos(thetaSpawn));
+        } while (r < MIN_SPAWN_DISTANCE);;
+
+        const L = Math.sqrt(MU * p_orb);
         const v_r = (MU / L) * e * Math.sin(thetaSpawn);
         const v_theta = L / r;
 
@@ -359,7 +365,7 @@ window.addEventListener('mouseup', () => {
 
 function calculateLaunchVelocity() {
     const dragVector = new THREE.Vector3().subVectors(aimStartPos, aimCurrentPos);
-    const launchPower = 0.02; 
+    const launchPower = 0.04; 
     const velocity = dragVector.multiplyScalar(launchPower);
     if (velocity.length() > MAX_ROCKET_SPEED) {
         velocity.normalize().multiplyScalar(MAX_ROCKET_SPEED);

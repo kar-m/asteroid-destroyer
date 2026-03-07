@@ -93,6 +93,7 @@ const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 // Game State
 let rockets = [];
 let asteroids = [];
+let explosions = [];
 let score = 0;
 let isGameOver = false;
 let isAiming = false;
@@ -333,9 +334,10 @@ class Asteroid {
         this.updateTrajectoryLine();
 
         if (this.mesh.position.length() < 1.5 + this.radius) {
-           this.kill();
-           flashEarth();
-           triggerGameOver();
+            explosions.push(new Explosion(this.mesh.position.clone(), 0xff5500, 60));
+            this.kill();
+            flashEarth();
+            triggerGameOver();
            return false;
         }
         return true;
@@ -346,6 +348,79 @@ class Asteroid {
         this.alive = false;
         scene.remove(this.mesh);
         scene.remove(this.trajectoryLine);
+    }
+}
+
+class Explosion {
+    constructor(position, colorHex, particleCount = 30) {
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        
+        // We need to store individual velocities for each particle
+        this.velocities = [];
+
+        for (let i = 0; i < particleCount; i++) {
+            // Start all particles at the exact point of impact
+            positions[i * 3] = position.x;
+            positions[i * 3 + 1] = position.y;
+            positions[i * 3 + 2] = position.z;
+
+            // Give each particle a random direction and speed
+            const velocity = new THREE.Vector3(
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2
+            ).normalize().multiplyScalar(Math.random() * 0.15 + 0.05);
+            
+            this.velocities.push(velocity);
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        
+        const material = new THREE.PointsMaterial({
+            color: colorHex,
+            size: 0.15, // Size of the "pixels"
+            transparent: true,
+            opacity: 1.0
+        });
+
+        this.mesh = new THREE.Points(geometry, material);
+        scene.add(this.mesh);
+        this.alive = true;
+    }
+
+    update() {
+        if (!this.alive) return false;
+
+        const positions = this.mesh.geometry.attributes.position.array;
+        
+        // Move each particle along its velocity vector
+        for (let i = 0; i < this.velocities.length; i++) {
+            positions[i * 3] += this.velocities[i].x;
+            positions[i * 3 + 1] += this.velocities[i].y;
+            positions[i * 3 + 2] += this.velocities[i].z;
+        }
+        
+        // Tell Three.js the positions have changed
+        this.mesh.geometry.attributes.position.needsUpdate = true;
+
+        // Fade out the explosion
+        this.mesh.material.opacity -= 0.02; 
+
+        // If it is completely transparent, kill it to save memory
+        if (this.mesh.material.opacity <= 0) {
+            this.kill();
+            return false;
+        }
+        return true;
+    }
+
+    kill() {
+        if (!this.alive) return;
+        this.alive = false;
+        scene.remove(this.mesh);
+        this.mesh.geometry.dispose();
+        this.mesh.material.dispose();
     }
 }
 
@@ -472,12 +547,14 @@ function triggerGameOver() {
 function resetGame() {
     asteroids.forEach(a => a.kill());
     rockets.forEach(r => r.kill());
+    explosions.forEach(e => e.kill());
     if (activeSatellite) {
         activeSatellite.kill();
         activeSatellite = null;
     }
     asteroids = [];
     rockets = [];
+    explosions = [];
     score = 0;
     scoreEl.innerText = 'Score: 0';
     isGameOver = false;
@@ -544,6 +621,7 @@ function animate() {
                 const rocket = rockets[j];
                 const dist = asteroid.mesh.position.distanceTo(rocket.mesh.position);
                 if (dist < asteroid.radius + 0.3) { 
+                    explosions.push(new Explosion(asteroid.mesh.position.clone(), 0xaaaaaa, 20));
                     asteroid.kill();
                     rocket.kill();
                     asteroids.splice(i, 1);
@@ -553,6 +631,11 @@ function animate() {
                     break; 
                 }
             }
+        }
+    }
+    for (let i = explosions.length - 1; i >= 0; i--) {
+        if (!explosions[i].update()) {
+            explosions.splice(i, 1);
         }
     }
 

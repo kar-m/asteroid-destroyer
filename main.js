@@ -30,15 +30,8 @@ const posAttr = earthGeometry.attributes.position;
 const v = new THREE.Vector3();
 
 for (let i = 0; i < count; i += 3) {
-    // Get the position of the first vertex of the triangle to determine "climate"
     v.fromBufferAttribute(posAttr, i);
-    
-    // --- Pseudo-Noise Logic ---
-    // We use sine/cosine waves based on the X, Y, Z position of the triangle.
-    // This creates "blobs" of land rather than random speckles.
     const noise = Math.sin(v.x * 1.5) * Math.cos(v.y * 1.5) * Math.sin(v.z * 1.5);
-    
-    // Adjust this threshold (0.1) to get more or less land
     const isLand = noise > 0.1; 
 
     if (isLand) {
@@ -56,7 +49,7 @@ const earthMaterial = new THREE.MeshPhongMaterial({
     vertexColors: true, 
     flatShading: true,
     shininess: 0,
-    emissive: 0x000000, // Starts off
+    emissive: 0x000000, 
     emissiveIntensity: 0
 });
 
@@ -70,14 +63,13 @@ function addStars() {
     const starGeometry = new THREE.BufferGeometry();
     const starMaterial = new THREE.PointsMaterial({
         color: 0xffffff,
-        size: 0.1,           // Adjust this to make stars bigger or smaller
+        size: 0.1,           
         transparent: true,
         opacity: 0.8
     });
 
     const starVertices = [];
     for (let i = 0; i < 5000; i++) {
-        // Randomly scatter stars in a massive sphere around the scene
         const x = (Math.random() - 0.5) * 1000;
         const y = (Math.random() - 0.5) * 1000;
         const z = (Math.random() - 0.5) * 1000;
@@ -88,7 +80,7 @@ function addStars() {
     const stars = new THREE.Points(starGeometry, starMaterial);
     scene.add(stars);
     
-    return stars; // Returning it in case you want to rotate it later
+    return stars; 
 }
 
 const starField = addStars();
@@ -107,8 +99,9 @@ let isAiming = false;
 let aimStartPos = new THREE.Vector3();
 let aimCurrentPos = new THREE.Vector3();
 let lastLaunchTime = 0;
-const LAUNCH_COOLDOWN = 500; 
-const MAX_ROCKET_SPEED = 0.4; 
+let activeSatellite = null; // Track the satellite
+const LAUNCH_COOLDOWN = 0; 
+const MAX_ROCKET_SPEED = 0.45; 
 
 // UI Elements
 const scoreEl = document.getElementById('score');
@@ -118,7 +111,7 @@ const restartBtn = document.getElementById('restart');
 // --- Visual & Helper Objects ---
 
 // Trajectory Line
-const MAX_POINTS = 50;
+const MAX_POINTS = 20;
 const trajectoryGeometry = new THREE.BufferGeometry();
 const trajPositions = new Float32Array(MAX_POINTS * 3);
 trajectoryGeometry.setAttribute('position', new THREE.BufferAttribute(trajPositions, 3));
@@ -133,6 +126,44 @@ const aimMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
 const aimMarker = new THREE.Mesh(aimMarkerGeometry, aimMarkerMaterial);
 aimMarker.visible = false;
 scene.add(aimMarker);
+
+// --- Classes ---
+
+class Satellite {
+    constructor() {
+        const geometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+        const material = new THREE.MeshLambertMaterial({ color: 0x00ffff }); // Cyan
+        this.mesh = new THREE.Mesh(geometry, material);
+        
+        this.angle = Math.random() * Math.PI * 2; // Start at a random angle
+        this.radius = 2.2; 
+        this.orbitSpeed = 0.015;
+        
+        scene.add(this.mesh);
+        this.active = true;
+    }
+
+    update() {
+        if (!this.active) return;
+        this.angle += this.orbitSpeed;
+        this.mesh.position.x = Math.cos(this.angle) * this.radius;
+        this.mesh.position.y = Math.sin(this.angle) * this.radius;
+        this.mesh.rotation.x += 0.02;
+        this.mesh.rotation.y += 0.02;
+    }
+
+    flashWarning() {
+        this.mesh.material.emissive.setHex(0xff0000); // Flash red when blocking
+        setTimeout(() => {
+            if (this.mesh && this.active) this.mesh.material.emissive.setHex(0x000000);
+        }, 200);
+    }
+
+    kill() {
+        this.active = false;
+        scene.remove(this.mesh);
+    }
+}
 
 // Rocket Class
 class Rocket {
@@ -218,11 +249,11 @@ class Asteroid {
 
         let thetaSpawn;
         let r;
-        const MIN_SPAWN_DISTANCE = 6.0; // Ensures it spawns well away from Earth (radius 1.5)
+        const MIN_SPAWN_DISTANCE = 10.0; 
         do {
             thetaSpawn = Math.random() * Math.PI * 2;
             r = p_orb / (1 + e * Math.cos(thetaSpawn));
-        } while (r < MIN_SPAWN_DISTANCE);;
+        } while (r < MIN_SPAWN_DISTANCE);
 
         const L = Math.sqrt(MU * p_orb);
         const v_r = (MU / L) * e * Math.sin(thetaSpawn);
@@ -330,14 +361,32 @@ function getMouseWorldPos(clientX, clientY) {
 }
 
 window.addEventListener('mousedown', (event) => {
+    if (event.target.tagName === 'BUTTON') return;
     if (isGameOver) return;
+    
     const now = Date.now();
     if (now - lastLaunchTime < LAUNCH_COOLDOWN) return;
 
     const pos = getMouseWorldPos(event.clientX, event.clientY);
     if (pos && pos.length() < 5) { 
+        let proposedStartPos = pos.normalize().multiplyScalar(1.7); 
+
+        // Check if satellite blocks the shot
+        if (activeSatellite) {
+            const dist = proposedStartPos.distanceTo(activeSatellite.mesh.position);
+            const BLOCK_RADIUS = 0.8; // Area around satellite where you can't fire
+            
+            if (dist < BLOCK_RADIUS) {
+                activeSatellite.flashWarning(); 
+                return; // Stop aiming/firing
+            }
+        }
         isAiming = true;
-        aimStartPos = pos.normalize().multiplyScalar(1.7); 
+        aimStartPos = proposedStartPos;
+
+        aimCurrentPos.copy(aimStartPos);
+        updateTrajectory();
+
         aimMarker.position.copy(aimStartPos);
         aimMarker.visible = true;
         trajectoryLine.visible = true;
@@ -401,10 +450,9 @@ function updateTrajectory() {
 }
 
 function flashEarth() {
-    earth.material.emissive.setHex(0xff0000); // Bright Red
+    earth.material.emissive.setHex(0xff0000); 
     earth.material.emissiveIntensity = 1;
 
-    // After 200 milliseconds, turn the red glow off
     setTimeout(() => {
         if (earth.material) {
             earth.material.emissive.setHex(0x000000);
@@ -424,6 +472,10 @@ function triggerGameOver() {
 function resetGame() {
     asteroids.forEach(a => a.kill());
     rockets.forEach(r => r.kill());
+    if (activeSatellite) {
+        activeSatellite.kill();
+        activeSatellite = null;
+    }
     asteroids = [];
     rockets = [];
     score = 0;
@@ -440,14 +492,37 @@ let spawnTimer = 0;
 function animate() {
     requestAnimationFrame(animate);
 
-    // 1. Only run game logic if the game is NOT over
     if (!isGameOver) {
         starField.rotation.y += 0.0002;
         earth.rotation.y += 0.002;
         earth.rotation.x += 0.001;
 
+        if (activeSatellite) {
+            activeSatellite.update();
+        }
+
         spawnTimer++;
-        if (asteroids.length === 0 && spawnTimer > 60) {
+
+        // --- Progressive Difficulty Logic ---
+        let maxAsteroids = 1;
+        let currentSpawnRate = 60; // 1 second
+
+        // Stage 3: 25+ Asteroids
+        if (score >= 250) {
+            maxAsteroids = 3;
+            currentSpawnRate = 30; // Half second
+        // Stage 2: 5+ Asteroids
+        } else if (score >= 50) {
+            maxAsteroids = 2;
+            currentSpawnRate = 45; // 0.75 seconds
+        }
+
+        // Spawn Satellite at 15 Asteroids
+        if (score >= 150 && !activeSatellite) {
+            activeSatellite = new Satellite();
+        }
+
+        if (asteroids.length < maxAsteroids && spawnTimer > currentSpawnRate) {
             asteroids.push(new Asteroid());
             spawnTimer = 0;
         }
@@ -481,7 +556,6 @@ function animate() {
         }
     }
 
-    // 2. ALWAYS render at the end, so we see the final state/flash
     renderer.render(scene, camera);
 }
 

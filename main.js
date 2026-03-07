@@ -104,6 +104,21 @@ let activeSatellite = null; // Track the satellite
 const LAUNCH_COOLDOWN = 0; 
 const MAX_ROCKET_SPEED = 0.45; 
 
+// Aiming State Machine
+let aimState = 0; // 0: None, 1: Angle, 2: Power
+let powerSliderVal = 0; // 0 to 1
+let powerSliderDir = 1; // 1 or -1
+let angleSliderVal = 0.5; // 0 to 1 (0.5 is straight)
+let angleSliderDir = 1; // 1 or -1
+
+// Aim UI DOM Elements
+const aimUiEl = document.getElementById('aim-ui');
+const powerContainerEl = document.getElementById('power-container');
+const powerBarEl = document.getElementById('power-bar');
+const powerCursorEl = document.getElementById('power-cursor');
+const angleContainerEl = document.getElementById('angle-container');
+const angleCursorEl = document.getElementById('angle-cursor');
+
 // UI Elements
 const scoreEl = document.getElementById('score');
 const gameOverEl = document.getElementById('game-over');
@@ -128,6 +143,13 @@ const aimMarker = new THREE.Mesh(aimMarkerGeometry, aimMarkerMaterial);
 aimMarker.visible = false;
 scene.add(aimMarker);
 
+// Hover Indicator
+const hoverMarkerGeometry = new THREE.SphereGeometry(0.15, 8, 8);
+const hoverMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 });
+const hoverMarker = new THREE.Mesh(hoverMarkerGeometry, hoverMarkerMaterial);
+hoverMarker.visible = false;
+scene.add(hoverMarker);
+
 // --- Classes ---
 
 class Satellite {
@@ -144,13 +166,13 @@ class Satellite {
         this.active = true;
     }
 
-    update() {
+    update(dt = 1.0) {
         if (!this.active) return;
-        this.angle += this.orbitSpeed;
+        this.angle += this.orbitSpeed * dt;
         this.mesh.position.x = Math.cos(this.angle) * this.radius;
         this.mesh.position.y = Math.sin(this.angle) * this.radius;
-        this.mesh.rotation.x += 0.02;
-        this.mesh.rotation.y += 0.02;
+        this.mesh.rotation.x += 0.02 * dt;
+        this.mesh.rotation.y += 0.02 * dt;
     }
 
     flashWarning() {
@@ -188,8 +210,8 @@ class Rocket {
         const gravityDir = this.mesh.position.clone().normalize().negate();
         const gravity = gravityDir.multiplyScalar(gravityStrength);
 
-        this.velocity.add(gravity);
-        this.mesh.position.add(this.velocity);
+        this.velocity.add(gravity.multiplyScalar(dt));
+        this.mesh.position.add(this.velocity.clone().multiplyScalar(dt));
 
         const currentAngle = Math.atan2(this.mesh.position.y, this.mesh.position.x);
         let deltaAngle = currentAngle - this.lastAngle;
@@ -321,15 +343,15 @@ class Asteroid {
         this.trajectoryLine.computeLineDistances();
     }
 
-    update() {
+    update(dt = 1.0) {
         const dist = this.mesh.position.length();
         const gravStr = ASTEROID_GRAVITY / (dist * dist);
         const gravDir = this.mesh.position.clone().normalize().negate();
-        this.velocity.add(gravDir.multiplyScalar(gravStr));
+        this.velocity.add(gravDir.multiplyScalar(gravStr * dt));
 
-        this.mesh.position.add(this.velocity);
-        this.mesh.rotation.x += this.rotSpeed.x;
-        this.mesh.rotation.y += this.rotSpeed.y;
+        this.mesh.position.add(this.velocity.clone().multiplyScalar(dt));
+        this.mesh.rotation.x += this.rotSpeed.x * dt;
+        this.mesh.rotation.y += this.rotSpeed.y * dt;
 
         this.updateTrajectoryLine();
 
@@ -389,23 +411,23 @@ class Explosion {
         this.alive = true;
     }
 
-    update() {
+    update(dt = 1.0) {
         if (!this.alive) return false;
 
         const positions = this.mesh.geometry.attributes.position.array;
         
         // Move each particle along its velocity vector
         for (let i = 0; i < this.velocities.length; i++) {
-            positions[i * 3] += this.velocities[i].x;
-            positions[i * 3 + 1] += this.velocities[i].y;
-            positions[i * 3 + 2] += this.velocities[i].z;
+            positions[i * 3] += this.velocities[i].x * dt;
+            positions[i * 3 + 1] += this.velocities[i].y * dt;
+            positions[i * 3 + 2] += this.velocities[i].z * dt;
         }
         
         // Tell Three.js the positions have changed
         this.mesh.geometry.attributes.position.needsUpdate = true;
 
         // Fade out the explosion
-        this.mesh.material.opacity -= 0.02; 
+        this.mesh.material.opacity -= 0.02 * dt; 
 
         // If it is completely transparent, kill it to save memory
         if (this.mesh.material.opacity <= 0) {
@@ -439,6 +461,9 @@ window.addEventListener('mousedown', (event) => {
     if (event.target.tagName === 'BUTTON') return;
     if (isGameOver) return;
     
+    // Only allow starting a new aim if we're not already aiming
+    if (aimState !== 0) return;
+
     const now = Date.now();
     if (now - lastLaunchTime < LAUNCH_COOLDOWN) return;
 
@@ -456,49 +481,134 @@ window.addEventListener('mousedown', (event) => {
                 return; // Stop aiming/firing
             }
         }
-        isAiming = true;
+        
+        // Start aiming phase 1: Angle
+        aimState = 1;
+        angleSliderVal = 0.5;
+        angleSliderDir = 1;
+        
+        // Show UI
+        aimUiEl.style.display = 'block';
+        angleContainerEl.style.display = 'block';
+        powerContainerEl.style.display = 'none';
+
         aimStartPos = proposedStartPos;
-
-        aimCurrentPos.copy(aimStartPos);
-        updateTrajectory();
-
         aimMarker.position.copy(aimStartPos);
         aimMarker.visible = true;
         trajectoryLine.visible = true;
+        
+        // Initial trajectory calculation with nominal power for preview
+        powerSliderVal = 1.0; 
+        updateTrajectory();
+        
+        hoverMarker.visible = false;
     }
 });
 
 window.addEventListener('mousemove', (event) => {
-    if (!isAiming || isGameOver) return;
-    const pos = getMouseWorldPos(event.clientX, event.clientY);
-    if (pos) {
-        aimCurrentPos.copy(pos);
-        updateTrajectory();
+    if (isGameOver) return;
+    
+    if (aimState === 0) {
+        const pos = getMouseWorldPos(event.clientX, event.clientY);
+        if (pos && pos.length() < 5) {
+            let proposedStartPos = pos.normalize().multiplyScalar(1.7);
+            
+            // Check satellite collision for hover color
+            let isBlocked = false;
+            if (activeSatellite) {
+                const dist = proposedStartPos.distanceTo(activeSatellite.mesh.position);
+                const BLOCK_RADIUS = 0.8; 
+                if (dist < BLOCK_RADIUS) {
+                    isBlocked = true;
+                }
+            }
+            
+            hoverMarker.position.copy(proposedStartPos);
+            hoverMarker.material.color.setHex(isBlocked ? 0xff0000 : 0x00ff00);
+            hoverMarker.visible = true;
+        } else {
+            hoverMarker.visible = false;
+        }
+    } else {
+        hoverMarker.visible = false;
     }
 });
 
-window.addEventListener('mouseup', () => {
-    if (!isAiming) return;
-    isAiming = false;
+window.addEventListener('keydown', (event) => {
+    if (event.code === 'Space') {
+        event.preventDefault(); // Prevent default scrolling
+        
+        if (aimState === 1) {
+            // Lock Angle, Move to Power
+            aimState = 2;
+            
+            // Update UI
+            angleContainerEl.style.display = 'none';
+            powerContainerEl.style.display = 'block';
+            powerSliderVal = 0;
+            powerSliderDir = 1;
+            
+            updateTrajectory(); 
+        } else if (aimState === 2) {
+            // Lock Power and FIRE
+            const finalPower = powerSliderVal;
+            const finalAngle = angleSliderVal;
+            
+            const velocity = calculateLaunchVelocity(finalPower, finalAngle);
+            rockets.push(new Rocket(aimStartPos.clone(), velocity));
+            lastLaunchTime = Date.now();
+            
+            // Reset Aiming UI & State
+            resetAimingState();
+        }
+    }
+});
+
+function resetAimingState() {
+    aimState = 0;
+    aimUiEl.style.display = 'none';
+    powerContainerEl.style.display = 'none';
+    angleContainerEl.style.display = 'none';
     aimMarker.visible = false;
     trajectoryLine.visible = false;
-    const velocity = calculateLaunchVelocity();
-    rockets.push(new Rocket(aimStartPos.clone(), velocity));
-    lastLaunchTime = Date.now();
-});
+}
 
-function calculateLaunchVelocity() {
-    const dragVector = new THREE.Vector3().subVectors(aimStartPos, aimCurrentPos);
-    const launchPower = 0.04; 
-    const velocity = dragVector.multiplyScalar(launchPower);
-    if (velocity.length() > MAX_ROCKET_SPEED) {
-        velocity.normalize().multiplyScalar(MAX_ROCKET_SPEED);
-    }
+function calculateLaunchVelocity(power, angle) {
+    // Normal vector from earth center to rocket start pos
+    const normal = aimStartPos.clone().normalize();
+    
+    // Default launch magnitude
+    const maxVelocity = MAX_ROCKET_SPEED;
+    const minVelocity = MAX_ROCKET_SPEED * 0.1; // Ensure some minimum speed
+    
+    // Map aim power (0-1) to velocity magnitude
+    const velocityMag = minVelocity + (maxVelocity - minVelocity) * power;
+    
+    // Map angle slider (0 to 1) to radians (-90 deg to 90 deg)
+    // 0 = -90 deg (left), 0.5 = 0 deg (straight out), 1 = +90 deg (right)
+    const maxAngleRad = Math.PI / 2;
+    const angleRad = (angle - 0.5) * 2 * maxAngleRad; 
+    
+    // Create base velocity vector pointing straight out
+    const velocity = normal.clone();
+    
+    // Apply rotation around Z axis
+    // We assume 2D gameplay happens in XY plane
+    velocity.applyAxisAngle(new THREE.Vector3(0, 0, 1), angleRad);
+    
+    // Scale by power
+    velocity.multiplyScalar(velocityMag);
+    
     return velocity;
 }
 
 function updateTrajectory() {
-    const velocity = calculateLaunchVelocity();
+    // Phase 1 preview: show max power trajectory so they can see full angle path
+    // Phase 2 preview: show actual power
+    const powerForPreview = aimState === 1 ? 1.0 : powerSliderVal;
+    const angleForPreview = angleSliderVal; 
+    
+    const velocity = calculateLaunchVelocity(powerForPreview, angleForPreview);
     const simPos = aimStartPos.clone();
     const simVel = velocity.clone();
     const positions = trajectoryLine.geometry.attributes.position.array;
@@ -539,9 +649,7 @@ function flashEarth() {
 function triggerGameOver() {
     isGameOver = true;
     gameOverEl.style.display = 'block';
-    isAiming = false;
-    trajectoryLine.visible = false;
-    aimMarker.visible = false;
+    resetAimingState();
 }
 
 function resetGame() {
@@ -570,15 +678,60 @@ function animate() {
     requestAnimationFrame(animate);
 
     if (!isGameOver) {
-        starField.rotation.y += 0.0002;
-        earth.rotation.y += 0.002;
-        earth.rotation.x += 0.001;
-
-        if (activeSatellite) {
-            activeSatellite.update();
+        // --- Calculate Time Scale ---
+        const timeScale = aimState > 0 ? 0.02 : 1.0;
+        
+        // --- Process Aiming Sliders ---
+        if (aimState > 0) {
+            // Even slower
+            const sliderSpeed = 0.005 + (score / 50) * 0.001;
+            
+            if (aimState === 1) {
+                // Update Angle Slider
+                angleSliderVal += sliderSpeed * angleSliderDir;
+                if (angleSliderVal >= 1) {
+                    angleSliderVal = 1;
+                    angleSliderDir = -1;
+                } else if (angleSliderVal <= 0) {
+                    angleSliderVal = 0;
+                    angleSliderDir = 1;
+                }
+                
+                // Update UI visually
+                const pct = (angleSliderVal * 100).toFixed(1) + '%';
+                angleCursorEl.style.left = pct;
+                
+                updateTrajectory();
+                
+            } else if (aimState === 2) {
+                // Update Power Slider
+                powerSliderVal += sliderSpeed * powerSliderDir;
+                if (powerSliderVal >= 1) {
+                    powerSliderVal = 1;
+                    powerSliderDir = -1;
+                } else if (powerSliderVal <= 0) {
+                    powerSliderVal = 0;
+                    powerSliderDir = 1;
+                }
+                
+                // Update UI visually
+                const pct = (powerSliderVal * 100).toFixed(1) + '%';
+                powerBarEl.style.width = pct;
+                powerCursorEl.style.left = pct;
+                
+                updateTrajectory();
+            }
         }
 
-        spawnTimer++;
+        starField.rotation.y += 0.0002 * timeScale;
+        earth.rotation.y += 0.002 * timeScale;
+        earth.rotation.x += 0.001 * timeScale;
+
+        if (activeSatellite) {
+            activeSatellite.update(timeScale);
+        }
+
+        spawnTimer += timeScale;
 
         // --- Progressive Difficulty Logic ---
         let maxAsteroids = 1;
@@ -605,14 +758,16 @@ function animate() {
         }
 
         for (let i = rockets.length - 1; i >= 0; i--) {
-            if (!rockets[i].update()) {
+            // Note: Rockets always run at full speed for snappy feel, or we can scale them too.
+            // Let's keep rockets at full speed so they hit fast after shooting
+            if (!rockets[i].update(1.0)) {
                 rockets.splice(i, 1);
             }
         }
 
         for (let i = asteroids.length - 1; i >= 0; i--) {
             const asteroid = asteroids[i];
-            if (!asteroid.update()) {
+            if (!asteroid.update(timeScale)) {
                 asteroids.splice(i, 1);
                 continue;
             }
@@ -634,7 +789,7 @@ function animate() {
         }
     }
     for (let i = explosions.length - 1; i >= 0; i--) {
-        if (!explosions[i].update()) {
+        if (!explosions[i].update(isGameOver ? 1.0 : (aimState > 0 ? 0.02 : 1.0))) {
             explosions.splice(i, 1);
         }
     }

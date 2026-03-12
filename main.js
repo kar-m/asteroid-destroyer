@@ -103,11 +103,19 @@ let lastLaunchTime = 0;
 let activeSatellite = null; // Track the satellite
 const LAUNCH_COOLDOWN = 0; 
 const MAX_ROCKET_SPEED = 0.45; 
+let bombUnlocked = false;
+let bombReady = 0;
+let activeShockwave = null;
+
+const BOMB_UNLOCK_SCORE = 30;
+const SHOCKWAVE_SPEED = 0.6;
+const SHOCKWAVE_MAX_RADIUS = 25;
 
 // UI Elements
 const scoreEl = document.getElementById('score');
 const gameOverEl = document.getElementById('game-over');
 const restartBtn = document.getElementById('restart');
+const bombIcon = document.getElementById("bomb-icon");
 
 // --- Visual & Helper Objects ---
 
@@ -424,6 +432,83 @@ class Explosion {
     }
 }
 
+class Shockwave {
+    constructor() {
+        const geometry = new THREE.RingGeometry(1, 1.3, 64);
+        const material = new THREE.MeshBasicMaterial({
+            color: 0xff3333,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.8
+        });
+
+        this.mesh = new THREE.Mesh(geometry, material);
+        this.mesh.rotation.x = Math.PI / 2;
+        this.mesh.position.set(0,0,0);
+
+        scene.add(this.mesh);
+
+        this.radius = 1;
+        this.alive = true;
+    }
+
+    update() {
+
+        if (!this.alive) return false;
+
+        this.radius += SHOCKWAVE_SPEED;
+
+        this.mesh.scale.set(this.radius, this.radius, 1);
+
+        // Fade effect
+        this.mesh.material.opacity -= 0.01;
+
+        // Destroy asteroids inside wave
+        for (let i = asteroids.length - 1; i >= 0; i--) {
+
+            const asteroid = asteroids[i];
+            const dist = asteroid.mesh.position.length();
+
+            if (dist < this.radius) {
+
+                explosions.push(
+                    new Explosion(
+                        asteroid.mesh.position.clone(),
+                        0xffaa00,
+                        40
+                    )
+                );
+
+                asteroid.kill();
+                asteroids.splice(i,1);
+
+                score += 10;
+                scoreEl.innerText = 'Score: ' + score;
+                
+            }
+        }
+
+        if (this.radius > SHOCKWAVE_MAX_RADIUS) {
+            this.kill();
+            return false;
+        }
+
+        return true;
+    }
+
+    kill() {
+        if (!this.alive) return;
+
+        this.alive = false;
+
+        scene.remove(this.mesh);
+        this.mesh.geometry.dispose();
+        this.mesh.material.dispose();
+    }
+}
+
+
+
 // --- Input Handling ---
 
 function getMouseWorldPos(clientX, clientY) {
@@ -487,6 +572,12 @@ window.addEventListener('mouseup', () => {
     lastLaunchTime = Date.now();
 });
 
+window.addEventListener('keydown', (event) => {
+    if (event.code === "Space" && bombReady && !isGameOver) {
+        activateBomb();
+    }
+});
+
 function calculateLaunchVelocity() {
     const dragVector = new THREE.Vector3().subVectors(aimStartPos, aimCurrentPos);
     const launchPower = 0.04; 
@@ -544,6 +635,35 @@ function triggerGameOver() {
     aimMarker.visible = false;
 }
 
+// --- UPDATE BOMB ICON UI ---
+function updateBombUI(){
+
+    if(!bombIcon) return;
+
+    if(bombReady > 0){
+        bombIcon.classList.add("active");
+    }else{
+        bombIcon.classList.remove("active");
+    }
+
+}
+
+// --- ACTIVATE BOMB ---
+function activateBomb() {
+
+    if (bombReady <= 0 || isGameOver) return;
+
+    bombReady--; // consume one bomb
+    updateBombUI();
+
+    explosions.push(
+        new Explosion(new THREE.Vector3(0,0,0),0xff0000,120)
+    );
+
+    activeShockwave = new Shockwave();
+
+}
+
 function resetGame() {
     asteroids.forEach(a => a.kill());
     rockets.forEach(r => r.kill());
@@ -560,6 +680,16 @@ function resetGame() {
     isGameOver = false;
     gameOverEl.style.display = 'none';
     lastLaunchTime = 0;
+
+    // --- RESET BOMB ---
+    bombUnlocked = false;
+    bombReady = 0;
+    updateBombUI();
+
+    if (activeShockwave) {
+        activeShockwave.kill();
+        activeShockwave = null;
+    }
 }
 
 if (restartBtn) restartBtn.addEventListener('click', resetGame);
@@ -628,10 +758,31 @@ function animate() {
                     rockets.splice(j, 1);
                     score += 10;
                     scoreEl.innerText = 'Score: ' + score;
+                    
+                    if (score >= 90) {
+                        bombReady = 3;
+                    }
+                    else if (score >= 60) {
+                        bombReady = 2;
+                    }
+                    else if (score >= 30) {
+                        bombReady = 1;
+                    }
+                    updateBombUI();
+
+                    console.log("Bombs available:", bombReady);
+
                     break; 
                 }
             }
         }
+        if (activeShockwave) {
+
+        if (!activeShockwave.update()) {
+            activeShockwave = null;
+        }
+
+}
     }
     for (let i = explosions.length - 1; i >= 0; i--) {
         if (!explosions[i].update()) {
@@ -642,4 +793,5 @@ function animate() {
     renderer.render(scene, camera);
 }
 
+updateBombUI();
 animate();

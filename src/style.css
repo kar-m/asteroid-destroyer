@@ -94,3 +94,48 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+#ui{
+  position:absolute;
+  top:20px;
+  left:20px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+/* Bomb square */
+
+#bomb-container{
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+
+  width: 45px;
+  height: 45px;
+
+  border: 2px solid white;
+  border-radius: 6px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+}
+
+/* Bomb icon */
+
+#bomb-icon{
+  font-size: 24px;
+  filter: grayscale(100%) brightness(0.5);
+  transition: all 0.25s ease;
+}
+
+/* ACTIVE bomb */
+
+#bomb-icon.active{
+  filter: none;
+  box-shadow: 0 0 10px red;
+}

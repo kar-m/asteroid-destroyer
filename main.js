@@ -1,26 +1,32 @@
 import './style.css'
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
-// --- Scene Setup ---
+let rocketModel = null;
+let winRocketModel = null;
+const loader = new GLTFLoader();
+loader.load('/shoot_rocket.glb', (gltf) => {
+    rocketModel = gltf.scene;
+        });
+loader.load('/retrofuturistic_toy_rocket.glb', (gltf) => {
+    winRocketModel = gltf.scene;
+});
+
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x111111); // Dark background for space
-
+scene.background = new THREE.Color(0x111111); 
 const camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize( window.innerWidth, window.innerHeight );
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.querySelector('#app').appendChild( renderer.domElement );
 
-// --- Lighting ---
-const ambientLight = new THREE.AmbientLight(0x404040, 1.5); // Soft white light
-scene.add(ambientLight);
+const ambientLight = new THREE.AmbientLight(0x404040, 1.5); scene.add(ambientLight);
 
 const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
 directionalLight.position.set(5, 10, 7);
 scene.add(directionalLight);
 
-// --- Game Objects ---
 
-// --- Earth with "Real" Continents ---
 const earthGeometry = new THREE.IcosahedronGeometry(1.5, 1); 
 const count = earthGeometry.attributes.position.count;
 earthGeometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
@@ -35,10 +41,8 @@ for (let i = 0; i < count; i += 3) {
     const isLand = noise > 0.1; 
 
     if (isLand) {
-        color.setHex(0x2e8b57); // Sea Green
-    } else {
-        color.setHex(0x1338be); // Cobalt Blue
-    }
+        color.setHex(0x2e8b57);     } else {
+        color.setHex(0x1338be);     }
 
     for (let j = 0; j < 3; j++) {
         earthGeometry.attributes.color.setXYZ(i + j, color.r, color.g, color.b);
@@ -58,7 +62,6 @@ scene.add(earth);
 
 camera.position.z = 20;
 
-// --- Stars Background ---
 function addStars() {
     const starGeometry = new THREE.BufferGeometry();
     const starMaterial = new THREE.PointsMaterial({
@@ -85,33 +88,44 @@ function addStars() {
 
 const starField = addStars();
 
-// --- Interaction & Game Logic ---
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); 
 
-// Game State
 let rockets = [];
 let asteroids = [];
 let explosions = [];
 let score = 0;
 let isGameOver = false;
+let isTimeStopped = false;
+let activePowerup = null;
+let isWinningSequence = false;
+let winRocketInstance = null;
 let isAiming = false;
 let aimStartPos = new THREE.Vector3();
 let aimCurrentPos = new THREE.Vector3();
 let lastLaunchTime = 0;
-let activeSatellite = null; // Track the satellite
-const LAUNCH_COOLDOWN = 0; 
+let activeSatellite = null; const LAUNCH_COOLDOWN = 0; 
 const MAX_ROCKET_SPEED = 0.45; 
 
-// UI Elements
 const scoreEl = document.getElementById('score');
 const gameOverEl = document.getElementById('game-over');
 const restartBtn = document.getElementById('restart');
+const powerupBombBtn = document.getElementById('powerup-bomb');
+const powerupLaserBtn = document.getElementById('powerup-laser');
+const powerupRocketBtn = document.getElementById('powerup-rocket');
 
-// --- Visual & Helper Objects ---
+function updateUI() {
+    if (score >= 20) powerupBombBtn.classList.remove('disabled');
+    else powerupBombBtn.classList.add('disabled');
+    if (score >= 50) powerupLaserBtn.classList.remove('disabled');
+    else powerupLaserBtn.classList.add('disabled');
+    if (score >= 250) powerupRocketBtn.classList.remove('disabled');
+    else powerupRocketBtn.classList.add('disabled');
+}
+updateUI();
 
-// Trajectory Line
+
 const MAX_POINTS = 20;
 const trajectoryGeometry = new THREE.BufferGeometry();
 const trajPositions = new Float32Array(MAX_POINTS * 3);
@@ -121,23 +135,31 @@ const trajectoryLine = new THREE.Line(trajectoryGeometry, trajectoryMaterial);
 trajectoryLine.visible = false;
 scene.add(trajectoryLine);
 
-// Aim Indicator
 const aimMarkerGeometry = new THREE.SphereGeometry(0.2, 8, 8);
 const aimMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
 const aimMarker = new THREE.Mesh(aimMarkerGeometry, aimMarkerMaterial);
 aimMarker.visible = false;
 scene.add(aimMarker);
 
-// --- Classes ---
+const hoverMarkerGeo = new THREE.SphereGeometry(0.1, 8, 8);
+const hoverMarkerMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+const hoverMarker = new THREE.Mesh(hoverMarkerGeo, hoverMarkerMat);
+hoverMarker.visible = false;
+scene.add(hoverMarker);
+
+const ghostLaserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,0)]);
+const ghostLaserMat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 1, transparent: true, opacity: 0.5 });
+const ghostLaserLine = new THREE.Line(ghostLaserGeo, ghostLaserMat);
+ghostLaserLine.visible = false;
+scene.add(ghostLaserLine);
+
 
 class Satellite {
     constructor() {
         const geometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-        const material = new THREE.MeshLambertMaterial({ color: 0x00ffff }); // Cyan
-        this.mesh = new THREE.Mesh(geometry, material);
+        const material = new THREE.MeshLambertMaterial({ color: 0x00ffff });         this.mesh = new THREE.Mesh(geometry, material);
         
-        this.angle = Math.random() * Math.PI * 2; // Start at a random angle
-        this.radius = 2.2; 
+        this.angle = Math.random() * Math.PI * 2;         this.radius = 2.2; 
         this.orbitSpeed = 0.015;
         
         scene.add(this.mesh);
@@ -154,8 +176,7 @@ class Satellite {
     }
 
     flashWarning() {
-        this.mesh.material.emissive.setHex(0xff0000); // Flash red when blocking
-        setTimeout(() => {
+        this.mesh.material.emissive.setHex(0xff0000);         setTimeout(() => {
             if (this.mesh && this.active) this.mesh.material.emissive.setHex(0x000000);
         }, 200);
     }
@@ -166,17 +187,23 @@ class Satellite {
     }
 }
 
-// Rocket Class
 class Rocket {
     constructor(position, velocity) {
-        this.mesh = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.2, 0.2, 0.8, 8),
-            new THREE.MeshLambertMaterial({ color: 0xffaa00 })
-        );
+        if (rocketModel) {
+            this.mesh = rocketModel.clone();
+            this.mesh.scale.set(0.05, 0.05, 0.05);         } else {
+            this.mesh = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.2, 0.2, 0.8, 8),
+                new THREE.MeshLambertMaterial({ color: 0xffaa00 })
+            );
+        }
         this.mesh.position.copy(position);
         this.velocity = velocity.clone();
-        this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), this.velocity.clone().normalize());
-        scene.add(this.mesh);
+        
+                const targetQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), this.velocity.clone().normalize());
+        this.mesh.quaternion.copy(targetQuaternion);
+        
+                        scene.add(this.mesh);
         this.alive = true;
         this.totalAngle = 0;
         this.lastAngle = Math.atan2(position.y, position.x);
@@ -226,7 +253,6 @@ class Rocket {
     }
 }
 
-// Asteroid Class
 const ASTEROID_GRAVITY = 0.02;
 class Asteroid {
     constructor() {
@@ -356,17 +382,14 @@ class Explosion {
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(particleCount * 3);
         
-        // We need to store individual velocities for each particle
-        this.velocities = [];
+                this.velocities = [];
 
         for (let i = 0; i < particleCount; i++) {
-            // Start all particles at the exact point of impact
-            positions[i * 3] = position.x;
+                        positions[i * 3] = position.x;
             positions[i * 3 + 1] = position.y;
             positions[i * 3 + 2] = position.z;
 
-            // Give each particle a random direction and speed
-            const velocity = new THREE.Vector3(
+                        const velocity = new THREE.Vector3(
                 (Math.random() - 0.5) * 2,
                 (Math.random() - 0.5) * 2,
                 (Math.random() - 0.5) * 2
@@ -379,8 +402,7 @@ class Explosion {
         
         const material = new THREE.PointsMaterial({
             color: colorHex,
-            size: 0.15, // Size of the "pixels"
-            transparent: true,
+            size: 0.15,             transparent: true,
             opacity: 1.0
         });
 
@@ -394,21 +416,17 @@ class Explosion {
 
         const positions = this.mesh.geometry.attributes.position.array;
         
-        // Move each particle along its velocity vector
-        for (let i = 0; i < this.velocities.length; i++) {
+                for (let i = 0; i < this.velocities.length; i++) {
             positions[i * 3] += this.velocities[i].x;
             positions[i * 3 + 1] += this.velocities[i].y;
             positions[i * 3 + 2] += this.velocities[i].z;
         }
         
-        // Tell Three.js the positions have changed
-        this.mesh.geometry.attributes.position.needsUpdate = true;
+                this.mesh.geometry.attributes.position.needsUpdate = true;
 
-        // Fade out the explosion
-        this.mesh.material.opacity -= 0.02; 
+                this.mesh.material.opacity -= 0.02; 
 
-        // If it is completely transparent, kill it to save memory
-        if (this.mesh.material.opacity <= 0) {
+                if (this.mesh.material.opacity <= 0) {
             this.kill();
             return false;
         }
@@ -424,7 +442,6 @@ class Explosion {
     }
 }
 
-// --- Input Handling ---
 
 function getMouseWorldPos(clientX, clientY) {
     mouse.x = (clientX / window.innerWidth) * 2 - 1;
@@ -435,33 +452,72 @@ function getMouseWorldPos(clientX, clientY) {
     return intersect ? target : null;
 }
 
+powerupBombBtn.addEventListener('click', () => {
+    if (score >= 20 && !activePowerup && !isGameOver) {
+        score -= 20;
+        scoreEl.innerText = 'Score: ' + score;
+        activePowerup = 'bomb';
+        isTimeStopped = true;
+        powerupBombBtn.classList.add('active');
+        updateUI();
+    }
+});
+
+powerupLaserBtn.addEventListener('click', () => {
+    if (score >= 50 && !activePowerup && !isGameOver) {
+        score -= 50;
+        scoreEl.innerText = 'Score: ' + score;
+        activePowerup = 'laser';
+        isTimeStopped = true;
+        powerupLaserBtn.classList.add('active');
+        updateUI();
+    }
+});
+
+powerupRocketBtn.addEventListener('click', () => {
+    if (score >= 250 && !activePowerup && !isGameOver) {
+        score -= 250;
+        scoreEl.innerText = 'Score: ' + score;
+        triggerWinSequence();
+        updateUI();
+    }
+});
+
 window.addEventListener('mousedown', (event) => {
+    if (event.target.closest('#powerups')) return;
     if (event.target.tagName === 'BUTTON') return;
     if (isGameOver) return;
     
+    if (activePowerup) {
+        const pos = getMouseWorldPos(event.clientX, event.clientY);
+        if (pos) {
+            if (activePowerup === 'bomb') {
+                triggerBomb(pos);
+            } else if (activePowerup === 'laser') {
+                triggerLaser(pos);
+            }
+            activePowerup = null;
+            isTimeStopped = false;
+            powerupBombBtn.classList.remove('active');
+            powerupLaserBtn.classList.remove('active');
+            ghostLaserLine.visible = false;
+        }
+        return;
+    }
+
     const now = Date.now();
     if (now - lastLaunchTime < LAUNCH_COOLDOWN) return;
 
-    const pos = getMouseWorldPos(event.clientX, event.clientY);
-    if (pos && pos.length() < 5) { 
-        let proposedStartPos = pos.normalize().multiplyScalar(1.7); 
-
-        // Check if satellite blocks the shot
-        if (activeSatellite) {
-            const dist = proposedStartPos.distanceTo(activeSatellite.mesh.position);
-            const BLOCK_RADIUS = 0.8; // Area around satellite where you can't fire
-            
-            if (dist < BLOCK_RADIUS) {
-                activeSatellite.flashWarning(); 
-                return; // Stop aiming/firing
-            }
+    if (!isAiming && !isGameOver && hoverMarker.visible) {
+        if (hoverMarker.material.color.getHex() === 0xff0000) {
+            if (activeSatellite) activeSatellite.flashWarning();
+            return;
         }
+        
         isAiming = true;
-        aimStartPos = proposedStartPos;
-
+        aimStartPos.copy(hoverMarker.position);
         aimCurrentPos.copy(aimStartPos);
         updateTrajectory();
-
         aimMarker.position.copy(aimStartPos);
         aimMarker.visible = true;
         trajectoryLine.visible = true;
@@ -469,11 +525,53 @@ window.addEventListener('mousedown', (event) => {
 });
 
 window.addEventListener('mousemove', (event) => {
-    if (!isAiming || isGameOver) return;
-    const pos = getMouseWorldPos(event.clientX, event.clientY);
-    if (pos) {
-        aimCurrentPos.copy(pos);
-        updateTrajectory();
+    if (isGameOver) return;
+
+    if (activePowerup) {
+        hoverMarker.visible = false;
+        
+        if (activePowerup === 'laser') {
+            const pos = getMouseWorldPos(event.clientX, event.clientY);
+            if (pos) {
+                const direction = pos.clone().normalize();
+                const farPoint = direction.clone().multiplyScalar(50);
+                ghostLaserLine.geometry.setFromPoints([new THREE.Vector3(0,0,0), farPoint]);
+                ghostLaserLine.geometry.attributes.position.needsUpdate = true;
+                ghostLaserLine.visible = true;
+            } else {
+                ghostLaserLine.visible = false;
+            }
+        }
+        return;
+    }
+
+    if (!isAiming) {
+        const pos = getMouseWorldPos(event.clientX, event.clientY);
+        if (pos && pos.length() < 5) {
+            let proposedStartPos = pos.normalize().multiplyScalar(1.7);
+            
+            let isBlocked = false;
+            if (activeSatellite) {
+                const dist = proposedStartPos.distanceTo(activeSatellite.mesh.position);
+                const BLOCK_RADIUS = 0.8; 
+                if (dist < BLOCK_RADIUS) {
+                    isBlocked = true;
+                }
+            }
+            
+            hoverMarker.position.copy(proposedStartPos);
+            hoverMarker.material.color.setHex(isBlocked ? 0xff0000 : 0x00ff00);
+            hoverMarker.visible = true;
+        } else {
+            hoverMarker.visible = false;
+        }
+    } else {
+        hoverMarker.visible = false;
+        const pos = getMouseWorldPos(event.clientX, event.clientY);
+        if (pos) {
+            aimCurrentPos.copy(pos);
+            updateTrajectory();
+        }
     }
 });
 
@@ -485,6 +583,102 @@ window.addEventListener('mouseup', () => {
     const velocity = calculateLaunchVelocity();
     rockets.push(new Rocket(aimStartPos.clone(), velocity));
     lastLaunchTime = Date.now();
+});
+
+function triggerBomb(pos) {
+    const BOMB_RADIUS = 3.0; 
+    explosions.push(new Explosion(pos.clone(), 0xff4400, 100));
+    
+    for (let i = asteroids.length - 1; i >= 0; i--) {
+        const asteroid = asteroids[i];
+        if (asteroid.mesh.position.distanceTo(pos) < BOMB_RADIUS) {
+            explosions.push(new Explosion(asteroid.mesh.position.clone(), 0xaaaaaa, 20));
+            asteroid.kill();
+            asteroids.splice(i, 1);
+            score += 10; 
+        }
+    }
+    scoreEl.innerText = 'Score: ' + score;
+    updateUI();
+}
+
+function triggerLaser(pos) {
+    const origin = new THREE.Vector3(0,0,0);
+    const direction = pos.clone().normalize();
+    
+    const laserGeo = new THREE.BufferGeometry().setFromPoints([origin, direction.clone().multiplyScalar(50)]);
+    const laserMat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 3 });
+    const laserLine = new THREE.Line(laserGeo, laserMat);
+    scene.add(laserLine);
+    
+    setTimeout(() => {
+        scene.remove(laserLine);
+        laserGeo.dispose();
+        laserMat.dispose();
+    }, 300);
+
+    const ray = new THREE.Ray(origin, direction);
+    
+    for (let i = asteroids.length - 1; i >= 0; i--) {
+        const asteroid = asteroids[i];
+        const distanceSq = ray.distanceSqToPoint(asteroid.mesh.position);
+        if (distanceSq < (asteroid.radius + 0.3) * (asteroid.radius + 0.3)) {
+            const dot = direction.dot(asteroid.mesh.position);
+            if (dot > 0) {
+                explosions.push(new Explosion(asteroid.mesh.position.clone(), 0xaaaaaa, 20));
+                asteroid.kill();
+                asteroids.splice(i, 1);
+                score += 10;
+            }
+        }
+    }
+    scoreEl.innerText = 'Score: ' + score;
+    updateUI();
+}
+
+function triggerWinSequence() {
+    isWinningSequence = true;
+    isTimeStopped = true;
+    
+    if (winRocketModel) {
+        winRocketInstance = winRocketModel.clone();
+        winRocketInstance.scale.set(1.5, 1.5, 1.5);     } else {
+        winRocketInstance = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.5, 0.5, 2, 8),
+            new THREE.MeshLambertMaterial({ color: 0x00ff00 })
+        );
+    }
+    
+        const winLight = new THREE.DirectionalLight(0xffffff, 3);
+    winLight.position.set(0, 0, 10);
+    scene.add(winLight);
+    
+    winRocketInstance.position.set(0, 1, -2.5);     winRocketInstance.userData = { time: 0, light: winLight };
+    scene.add(winRocketInstance);
+    
+        const dir = new THREE.Vector3(0, 1, 1).normalize();
+    winRocketInstance.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    
+        winRocketInstance.rotateY(Math.PI / 4);
+}
+
+function triggerWinGameOver() {
+    isGameOver = true;
+    gameOverEl.style.display = 'block';
+    gameOverEl.querySelector('h1').innerText = 'YOU WIN!';
+    gameOverEl.querySelector('p').innerText = 'HUMANITY IS SAVED';
+    gameOverEl.querySelector('h1').style.color = '#2a9d8f';
+    isAiming = false;
+    trajectoryLine.visible = false;
+    aimMarker.visible = false;
+}
+
+window.addEventListener('keydown', (event) => {
+    if (event.key === 'b' || event.key === 'B') {
+        score += 50;
+        scoreEl.innerText = 'Score: ' + score;
+        updateUI();
+    }
 });
 
 function calculateLaunchVelocity() {
@@ -558,7 +752,24 @@ function resetGame() {
     score = 0;
     scoreEl.innerText = 'Score: 0';
     isGameOver = false;
+    isTimeStopped = false;
+    activePowerup = null;
+    isWinningSequence = false;
+    if (winRocketInstance) {
+        if (winRocketInstance.userData.light) {
+            scene.remove(winRocketInstance.userData.light);
+        }
+        scene.remove(winRocketInstance);
+        winRocketInstance = null;
+    }
+    powerupBombBtn.classList.remove('active');
+    powerupLaserBtn.classList.remove('active');
+    updateUI();
+    
     gameOverEl.style.display = 'none';
+    gameOverEl.querySelector('h1').innerText = 'GAME OVER';
+    gameOverEl.querySelector('p').innerText = 'EARTH HAS BEEN DESTROYED';
+    gameOverEl.querySelector('h1').style.color = '#ff4444';
     lastLaunchTime = 0;
 }
 
@@ -569,7 +780,7 @@ let spawnTimer = 0;
 function animate() {
     requestAnimationFrame(animate);
 
-    if (!isGameOver) {
+    if (!isGameOver && !isTimeStopped) {
         starField.rotation.y += 0.0002;
         earth.rotation.y += 0.002;
         earth.rotation.x += 0.001;
@@ -580,21 +791,17 @@ function animate() {
 
         spawnTimer++;
 
-        // --- Progressive Difficulty Logic ---
         let maxAsteroids = 1;
-        let currentSpawnRate = 60; // 1 second
+        let currentSpawnRate = 60;
 
-        // Stage 3: 25+ Asteroids
         if (score >= 250) {
             maxAsteroids = 3;
-            currentSpawnRate = 30; // Half second
-        // Stage 2: 5+ Asteroids
+            currentSpawnRate = 30;
         } else if (score >= 50) {
             maxAsteroids = 2;
-            currentSpawnRate = 45; // 0.75 seconds
+            currentSpawnRate = 45;
         }
 
-        // Spawn Satellite at 15 Asteroids
         if (score >= 150 && !activeSatellite) {
             activeSatellite = new Satellite();
         }
@@ -628,11 +835,21 @@ function animate() {
                     rockets.splice(j, 1);
                     score += 10;
                     scoreEl.innerText = 'Score: ' + score;
+                    updateUI();
                     break; 
                 }
             }
         }
     }
+    
+    if (isWinningSequence && winRocketInstance) {
+        winRocketInstance.position.y += 0.05; 
+        winRocketInstance.position.z += 0.06;         winRocketInstance.userData.time += 0.016;
+        if (winRocketInstance.userData.time > 2) {             isWinningSequence = false;
+            triggerWinGameOver();
+        }
+    }
+
     for (let i = explosions.length - 1; i >= 0; i--) {
         if (!explosions[i].update()) {
             explosions.splice(i, 1);

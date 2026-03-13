@@ -77,3 +77,85 @@ body {
 #restart:hover {
     background: #21867a;
 }
+
+/* Powerups UI */
+#powerups {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    gap: 15px;
+    pointer-events: auto;
+}
+
+.powerup {
+    position: relative;
+    width: 60px;
+    height: 60px;
+    background: rgba(40, 40, 40, 0.8);
+    border: 2px solid #555;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.powerup img {
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
+}
+
+.powerup .price {
+    position: absolute;
+    bottom: -10px;
+    right: -10px;
+    background: #444;
+    color: white;
+    font-size: 12px;
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 10px;
+    border: 1px solid #777;
+}
+
+.powerup:hover:not(.disabled) {
+    background: rgba(80, 80, 80, 0.9);
+    border-color: #888;
+    transform: scale(1.05);
+}
+
+.powerup.active {
+    border-color: #2a9d8f;
+    box-shadow: 0 0 10px #2a9d8f;
+}
+
+.powerup.disabled {
+    opacity: 0.5;
+    filter: grayscale(100%);
+    cursor: not-allowed;
+}
+
+/* Tooltip styles */
+.powerup::after {
+    content: attr(title);
+    position: absolute;
+    bottom: 110%;
+    right: 0%;  /* Align to the right edge rather than centering to prevent clipping on window edge */
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+    z-index: 100;
+}
+
+.powerup:hover::after {
+    opacity: 1;
+}
